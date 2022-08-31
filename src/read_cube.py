@@ -2,6 +2,7 @@ import numpy    as np
 import scipy    as sp
 import astropy  as ap
 
+from astropy.io import fits
 
 class CO_cube():
 
@@ -17,8 +18,8 @@ class CO_cube():
         """
         
         # open file
-        file = f"observations/{filename}"
-        moment_1_fits = ap.io.fits.open(file)
+        file = f"{filename}"
+        moment_1_fits = fits.open(file)
 
         # read data
         data = moment_1_fits[0].data
@@ -28,7 +29,7 @@ class CO_cube():
         if distance is not None: self.DISTANCE = distance
 
         # subtract systemic velocity
-        self.data = data - v_syst
+        self.data = data - self.V_SYST
 
         # get header info to get grid
         header = moment_1_fits[0].header
@@ -39,14 +40,14 @@ class CO_cube():
         crpix1 = header['CRPIX1']
         crpix2 = header['CRPIX2']
 
-        # get midpoint coordinates
+        # get coordinates
         midpoint_ra     = crpix1 * cdelt1 * 3600
         midpoint_dec    = crpix2 * cdelt2 * 3600
 
         # create grid in angular coordinates
-        self.X_ang = np.linspace(-midpoint_ra, midpoint_ra, naxis1)
+        self.X_ang = -np.linspace(-midpoint_ra, midpoint_ra, naxis1)
         self.Y_ang = np.linspace(-midpoint_dec, midpoint_dec, naxis2)
 
         # create grid in physical coordinates
-        self.X_phys = np.copy(self.X_ang) * distance
-        self.Y_phys = np.copy(self.X_ang) * distance
+        self.X_phys = np.copy(self.X_ang) * self.DISTANCE
+        self.Y_phys = np.copy(self.X_ang) * self.DISTANCE

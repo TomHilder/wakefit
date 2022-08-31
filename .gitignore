@@ -1,2 +1,6 @@
 */*
 *.ipynb
+src/__pycache__/*
+
+
+!src/*
