@@ -34,7 +34,7 @@ class Moment_9():
         # read data and header
         with fits.open(file_loc) as hdul:
             header = hdul[0].header
-            data   = hdul[0].data
+            data   = hdul[0].data       # this is in m/s
 
         # subtract systemic velocity
         self.data = data - self.V_SYSTEM

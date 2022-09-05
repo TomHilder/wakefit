@@ -5,12 +5,11 @@ import astropy  as ap
 from astropy.io import fits
 
 class CO_cube():
-
-    V_SYST      = 0
+    
     DISTANCE    = 0
     ang_coords  = None
 
-    def __init__(self, filename: str, v_syst: float = None, distance: float = None) -> None:
+    def __init__(self, filename: str, distance: float = None) -> None:
         """Create CO cube object from provided fits file.
         filename: name of file
         v_syst:   systematic velocity in km/s
@@ -25,11 +24,9 @@ class CO_cube():
         data = moment_1_fits[0].data
 
         # set constants
-        if v_syst   is not None: self.V_SYST   = v_syst 
         if distance is not None: self.DISTANCE = distance
 
-        # subtract systemic velocity
-        self.data = data - self.V_SYST
+        self.data = data
 
         # get header info to get grid
         header = moment_1_fits[0].header
