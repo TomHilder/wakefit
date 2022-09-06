@@ -14,6 +14,8 @@ class DiskModel():
 
     DISTANCE = 0.0
 
+    rotated = False
+
     def __init__(
         self,
         distance,   # don't fit ?
@@ -161,6 +163,8 @@ class DiskModel():
         planet_az   = 0.,
         grid_rotate = True
     ):
+        if self.rotated:
+            return
 
         print("edge height = ", self.z[0,0])
         print("max height = ", np.max(self.z))
@@ -212,3 +216,5 @@ class DiskModel():
         self.rot_y       = Y
         self.rot_z       = Z
         self.rot_v_field = V
+
+        self.rotated = True
