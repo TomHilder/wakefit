@@ -166,8 +166,8 @@ class DiskModel():
         if self.rotated:
             return
 
-        print("edge height = ", self.z[0,0])
-        print("max height = ", np.max(self.z))
+        #print("edge height = ", self.z[0,0])
+        #print("max height = ", np.max(self.z))
 
         # get number of points
         N_X = self.x.shape[1]

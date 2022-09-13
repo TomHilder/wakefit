@@ -1,38 +1,68 @@
 from dis import dis
 import numpy                as np
+import matplotlib.pyplot    as plt
 from scipy.interpolate  import griddata
-from src.read_M9        import Moment_9
 from src.discretise     import discretise_data
 from src.model          import DiskModel
+from src.point_dist     import calc_pp_dist_arr_chi_sq
+
+def find_max_list_index(my_list):
+    lengths = [len(lst) for lst in my_list]
+    try:
+        return np.argmax(
+            np.array(lengths)
+        )
+    except:
+        raise Exception
+
+def find_max_list(my_list):
+    try:
+        ind = find_max_list_index(my_list)
+        return my_list[ind]
+    except Exception:
+        raise Exception
+
+def find_contours(cs):
+
+    # get all polygon segments
+    all_segs = cs.allsegs
+
+    contours = []
+    for level in all_segs:
+        try:
+            contours.append(find_max_list(level))
+        except Exception:
+            contours.append(np.array([[0,0],[0,0]]))
+
+    return contours
 
 def get_chi_sq(
-    distance,
-    r_outer,
-    a_cw,
-    m_star,
-    hr,
-    psi,
+    x,
     p,
-    q,
-    z0,
-    r_taper,
-    q_taper,
+    a_cw,
+    r_outer,
+    distance,
     pos_angle,
     planet_az,
-    inclination
+    inclination,
+    M9_map,
+    dM9_map,
+    discrete_data,
+    contours_data,
+    velocity_channels
 ):
 
-    M9_file  = "peak_velocity/HD_163296_CO_220GHz.0.15arcsec.JvMcorr.image_v0.fits"
-    dM9_file = "peak_velocity/HD_163296_CO_220GHz.0.15arcsec.JvMcorr.image_dv0.fits"
+    m_star = x[0]
+    hr = np.abs(x[1])
+    psi = x[2]
+    q = x[3]
+    z0 = x[4]
+    r_taper = x[5]
+    q_taper = x[6]
 
-    M9_map = Moment_9(M9_file, v_system=5.76)
-    dM9_map = Moment_9(dM9_file)
+    print(x)
 
-    max_vel_channel = 2.6*1e3
-    n_vels  = int(2*2.6/0.2 + 1)
-    velocity_channels = np.linspace(-max_vel_channel, max_vel_channel, n_vels)
-
-    dd = discretise_data(M9_map.data, velocity_channels)
+    dd = discrete_data
 
     model = DiskModel(
         distance=distance,
@@ -75,18 +105,38 @@ def get_chi_sq(
     oxx, oyy = np.meshgrid(ox, oy)
     grid = (oxx, oyy)
 
-    interpolated_v = griddata(points, mvv, grid, method="linear", fill_value=np.nan)
+    try:
+        interpolated_v = griddata(points, mvv, grid, method="linear", fill_value=np.nan)
+    except:
+        return 1e10
 
-    residuals_not_discrete = M9_map.data - interpolated_v
+    csm = plt.contour(oxx, oyy, interpolated_v, cmap="RdBu_r", levels=velocity_channels)
+    contours_model = find_contours(csm)
+    plt.close('all')
 
-    chi_sq_not_discrete = np.nansum((M9_map.data - interpolated_v)**2 / dM9_map.data**2)
-    red_chi_sq_not_discrete = chi_sq_not_discrete / (2048**2 - 13)
+    distance = 0.0
+    for i in range(len(contours_data)):
+        points1 = contours_data[i]
+        points2 = contours_model[i]
+        temp_dist = calc_pp_dist_arr_chi_sq(points1, points2, 0.15)
+        distance += temp_dist
 
-    dm = discretise_data(interpolated_v, velocity_channels)
+    n_data_contours = 13948
+    red_chi_sq_cont = distance / (n_data_contours - 13)
 
-    residuals = dd - dm
+    print(red_chi_sq_cont)
 
-    chi_sq = np.nansum((dd - dm)**2 / dM9_map.data**2)
-    red_chi_sq = chi_sq / (2048**2 - 13)
+    #residuals_not_discrete = M9_map.data - interpolated_v
 
-    return (red_chi_sq, red_chi_sq_not_discrete), (residuals, residuals_not_discrete)
+    #chi_sq_not_discrete = np.nansum((M9_map.data - interpolated_v)**2 / dM9_map.data**2)
+    #red_chi_sq_not_discrete = chi_sq_not_discrete / (2048**2 - 13)
+
+    #dm = discretise_data(interpolated_v, velocity_channels)
+
+    #residuals = dd - dm
+
+    #chi_sq = np.nansum((dd - dm)**2 / dM9_map.data**2)
+    #red_chi_sq = chi_sq / (2048**2 - 13)
+
+    #return (red_chi_sq, red_chi_sq_cont, red_chi_sq_not_discrete), (residuals, residuals_not_discrete)
+    return red_chi_sq_cont
