@@ -1,27 +1,59 @@
 from pickle import FALSE
-import numpy        as np
-from dis        import dis
-from astropy    import constants as c
-from .rotations import rotation_matrix
+import numpy                        as np
+from astropy                    import constants
+from wakeflow.wakefit_interface import _WakefitModel
+from .rotations                 import rotation_matrix
+from typing                     import Tuple
 
 # all constants given in CGS units
-m_solar    = c.M_sun.si.value
-m_jupiter  = c.M_jup.si.value
-G_const    = c.G.si.value
-au         = c.au.si.value
+M_SOL  = constants.M_sun.si.value
+M_JUP  = constants.M_jup.si.value
+G_CONS = constants.G.si.value
+AU     = constants.au.si.value
 
 class DiskModel():
 
-    DISTANCE = 0.0
+    # grid parameters
+    N_X = 0
+    N_Y = 0
 
+    # radii in AU
+    R_OUTER  = 0.0      # disk outer radius
+    R_TAPER  = 0.0      # critical radius for exp. taper on height
+    R_REF    = 0.0      # radius where HR_REF and Z_REF are taken
+    R_PLANET = 0.0      # orbital radius of the planet
+
+    # power law indices
+    CS_IND   = 0.0      # sound speed
+    P_IND    = 0.0      # density
+    Q_IND    = 0.0      # height
+    Q_TAPER  = 0.0      # taper on height
+
+    # reference height in AU
+    Z_REF = 0.0
+
+    # disk aspect ratio
+    HR_REF = 0.0
+
+    # rotation direction (1 is anticlockwise)
+    A_CW = 1
+
+    # central star mass in M_solar
+    M_STAR = 0.0
+
+    # mass of planet in m_Jupiter
+    M_PLANET = 0.0
+
+    # has the model been rotated?
     rotated = False
 
     def __init__(
         self,
-        distance,   # don't fit ?
-        r_outer,    # don't fit
-        a_cw,       # don't fit
+        r_outer,
+        a_cw,
         m_star,
+        m_planet,
+        r_planet,
         hr,
         psi,
         p,
@@ -29,139 +61,139 @@ class DiskModel():
         z0,
         r_taper,
         q_taper,
-        grid = "cartesian"
+        r_ref,
+        n_x = 200,
+        n_y = 201,
         ) -> None:
 
-        self.DISTANCE = distance
-
-        r0  = 1
-
-        n_r   = 100
-        n_phi = 160
-
-        n_x = 200
-        n_y = 201
+        # setup parameters as constants for model
+        self.N_X      = n_x
+        self.N_Y      = n_y
+        self.R_OUTER  = r_outer
+        self.R_TAPER  = r_taper
+        self.R_REF    = r_ref
+        self.R_PLANET = r_planet
+        self.CS_IND   = psi
+        self.P_IND    = p
+        self.Q_IND    = q
+        self.Q_TAPER  = q_taper
+        self.Z_REF    = z0
+        self.HR_REF   = hr
+        self.A_CW     = a_cw
+        self.M_STAR   = m_star
+        self.M_PLANET = m_planet
         
         # setup grid coordinates
-        if grid == "cartesian":
-            self.x, self.y   = self.setup_grid_cart(n_x, n_y, r_outer)
-            self.r, self.phi = self.get_polar(self.x, self.y)
-        elif grid == "polar":
-            self.r, self.phi = self.setup_grid_polar(n_r, n_phi, r_outer, r_inner=0.5)
-            self.x, self.y   = self.get_cartesian(self.r, self.phi)
-        else:
-            raise Exception('choose grid="cartesian" or "polar"')
+        self.x, self.y   = self.setup_grid_cart()
+        self.r, self.phi = self.get_polar()
 
         # find disc height
-        self.z = self.get_height(self.r, q, z0, r0, r_taper, q_taper)
+        self.z = self.get_height()
 
         # azimuthal velocities with pressure and height in m/s
-        self.v_phi = self.get_velocities(self.r, self.z, m_star, a_cw, hr, r0, psi, p)
+        self.v_phi = self.get_rotation_velocity()
+
+        # radial velocities initialised to zero
+        self.v_r  = np.zeros(self.v_phi.shape)
+
+        # calcualte velocity perturbations from the planet
+        wake = self.get_planet_wake()
+        self.wake_v_r   = np.transpose(wake[2][:,0,:]) * 1.e3 # convert to SI units from km/s 
+        self.wake_v_phi = np.transpose(wake[3][:,0,:]) * 1.e3 # convert to SI units from km/s 
+
+        # add velocity perturbations to background
+        self.v_phi += self.wake_v_phi
+        self.v_r   += self.wake_v_r
 
         # get cartesian velocities
-        v_x = -self.v_phi * np.sin(self.phi) # + self.v_r * np.cos(self.phi)
-        v_y =  self.v_phi * np.cos(self.phi) # + self.v_r * np.sin(self.phi)
+        v_x = -self.v_phi * np.sin(self.phi) + self.v_r * np.cos(self.phi)
+        v_y =  self.v_phi * np.cos(self.phi) + self.v_r * np.sin(self.phi)
         v_z = np.zeros(v_x.shape)
 
         # define cartesian velocity field
         self.v_field = np.array([v_x, v_y, v_z])
 
-    def setup_grid_polar(
-        self,
-        n_r,
-        n_phi,
-        r_outer,
-        r_inner = 0.0
-    ):
+    def setup_grid_cart(self) -> np.ndarray:
 
-        r   = np.linspace(r_inner, r_outer, n_r)
-        phi = np.linspace(0.0, 2*np.pi, n_phi)
+        # get grid coordinates
+        x = np.linspace(-self.R_OUTER, self.R_OUTER, self.N_X)
+        y = np.linspace(-self.R_OUTER, self.R_OUTER, self.N_Y)
 
-        return np.meshgrid(r, phi)
-
-    def setup_grid_cart(
-        self,
-        n_x,
-        n_y,
-        r_outer
-    ):
-
-        x = np.linspace(-r_outer, r_outer, n_x)
-        y = np.linspace(-r_outer, r_outer, n_y)
-
+        # return meshgrids of coords
         return np.meshgrid(x, y)
- 
-    def get_cartesian(
-        self,
-        r,
-        phi
-    ):
-        x = r * np.cos(phi)
-        y = r * np.sin(phi)
 
-        return x, y
+    def get_polar(self) -> Tuple[np.ndarray]:
 
-    def get_polar(
-        self,
-        x,
-        y
-    ):
+        # perform transformations
+        r   = np.sqrt(self.x**2 + self.y**2)
+        phi = np.arctan2(self.y, self.x)
 
-        r   = np.sqrt(x**2 + y**2)
-        phi = np.arctan2(y, x)
-
+        # return transformed coords
         return r, phi
-
-    def get_sky_coords(self) -> None:
-
-        self.x_sky = self.x / self.DISTANCE
-        self.y_sky = self.y / self.DISTANCE
-        self.z_sky = self.z / self.DISTANCE
         
-    def get_height(
-        self,
-        r:          np.ndarray, 
-        q:          float,
-        z0:         float, 
-        r0:         float = 1.0,
-        r_taper:    float = np.inf,
-        q_taper:    float = 1.0
-    ) -> np.ndarray:
+    def get_height(self) -> np.ndarray:
 
-        rr = r / self.DISTANCE
+        # calculate and return height using model constants
+        return self.Z_REF * ( (self.r / self.R_REF)**self.Q_IND ) * np.exp( -(self.r / self.R_TAPER)**self.Q_TAPER )
 
-        return z0 * ( (rr / r0)**q ) * np.exp( -(rr / r_taper)**q_taper ) * self.DISTANCE
+    def get_rotation_velocity(self) -> np.ndarray:
 
-    def get_velocities(
-        self, 
-        r,
-        z,
-        m_star, 
-        a_cw, 
-        hr, 
-        r0, 
-        psi, 
-        p
-    ) -> np.ndarray:
+        v_kep = np.sqrt(G_CONS * self.M_STAR * M_SOL / (self.r * AU))
+        v_phi = self.A_CW * v_kep
 
-        v_kep = np.sqrt(G_const * m_star * m_solar / (r * au))
-        v_phi = a_cw * v_kep
-
-        hr_func = hr * (r / r0) ** (0.5 - psi)
+        hr_func = self.HR_REF * (self.r / self.R_REF) ** (0.5 - self.CS_IND)
 
         # height and pressure terms correction
         corr = np.sqrt(
-            (-1* (p + 2 * psi) * hr_func**2) + (1 - 2 * psi) + (2 * psi * r / np.sqrt(r**2 + z**2))
+            (-1* (self.P_IND + 2 * self.CS_IND) * hr_func**2) + \
+            (1 - 2 * self.CS_IND) + \
+            (2 * self.CS_IND * self.r / np.sqrt(self.r**2 + self.z**2))
         )
 
         return v_phi * corr
-    
+
+    def get_planet_wake(self) -> Tuple[np.ndarray]:
+
+        # initialise wakeflow model
+        wake_model = _WakefitModel()
+
+        if self.A_CW == 1:
+            cw_rot = False
+        elif self.A_CW == -1:
+            cw_rot = True
+        else:
+            raise Exception("Rotation direction undefined.")
+
+        # configure model appropriately
+        wake_model.configure(
+            m_star      = self.M_STAR,
+            m_planet    = self.M_PLANET,
+            r_outer     = self.R_OUTER,
+            r_planet    = self.R_PLANET,
+            r_ref       = self.R_REF,
+            q           = self.CS_IND,
+            p           = self.P_IND,
+            hr          = self.HR_REF,
+            cw_rotation = cw_rot,
+            grid_type   = "cartesian",
+            n_x         = self.N_X,
+            n_y         = self.N_Y,
+            n_z         = 1,
+            make_midplane_plots = False,
+            show_midplane_plots = False,
+            save_perturbations  = False,
+            save_total          = False
+        )
+
+        # generate and return perturbations
+        return wake_model.run()
+
     def rotate(
         self,
-        pos_ang     = 0.,
-        inc         = 0.,
-        planet_az   = 0.,
-        grid_rotate = True
+        pos_ang     = 0.0,
+        inc         = 0.0,
+        planet_az   = 0.0,
+        grid_rotate = True  # rarely would ever want to change this
     ):
         if self.rotated:
             return
@@ -169,11 +201,8 @@ class DiskModel():
         #print("edge height = ", self.z[0,0])
         #print("max height = ", np.max(self.z))
 
-        # get number of points
-        N_X = self.x.shape[1]
-        N_Y = self.x.shape[0]
-        assert self.y.shape[1] == N_X
-        assert self.y.shape[0] == N_Y
+        assert self.y.shape[1] == self.N_X
+        assert self.y.shape[0] == self.N_Y
 
         # convert to radians
         pos_ang     *= np.pi / 180.
@@ -192,8 +221,8 @@ class DiskModel():
         V = np.copy(self.v_field)
 
         # loop over all points
-        for i in range(N_X):
-            for j in range(N_X):
+        for i in range(self.N_X):
+            for j in range(self.N_X):
 
                 # rotate grid
                 if grid_rotate:
